@@ -12,9 +12,23 @@ class Events(commands.Cog):
         channel: discord.abc.GuildChannel
     ):
 
-        print(
-            f"[ANTI-NUKE] Channel deleted: {channel.name}"
-        )
+        guild = channel.guild
+
+        try:
+            async for entry in guild.audit_logs(
+                limit=1,
+                action=discord.AuditLogAction.channel_delete
+            ):
+
+                print("=" * 40)
+                print("[ANTI-NUKE]")
+                print(f"Channel : {channel.name}")
+                print(f"Deleted By : {entry.user}")
+                print(f"User ID : {entry.user.id}")
+                print("=" * 40)
+
+        except Exception as e:
+            print(e)
 
 
 async def setup(bot):
