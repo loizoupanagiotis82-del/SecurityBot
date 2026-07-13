@@ -20,3 +20,4 @@ class Warning(Base):
     moderator_id: Mapped[int] = mapped_column(BigInteger)
 
     reason: Mapped[str] = mapped_column(String(500))
+from database.guild_settings import GuildSettings
