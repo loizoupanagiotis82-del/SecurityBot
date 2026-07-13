@@ -281,6 +281,128 @@ class Events(commands.Cog):
             action_success=action_success,
         )
 
+    # ===========================
+    # ANTI ROLE DELETE
+    # ===========================
 
+    @commands.Cog.listener()
+    async def on_guild_role_delete(
+        self,
+        deleted_role: discord.Role,
+    ):
+        guild = deleted_role.guild
+
+        executor = await self.get_executor(
+            guild=guild,
+            action=discord.AuditLogAction.role_delete,
+            target_id=deleted_role.id,
+        )
+
+        if executor is None:
+            return
+
+        if self.bot.user and executor.id == self.bot.user.id:
+            return
+
+        whitelisted = await is_whitelisted(
+            guild_id=guild.id,
+            user_id=executor.id,
+        )
+
+        action_taken = "None — user is whitelisted"
+        action_success = True
+
+        if not whitelisted:
+            try:
+                await guild.ban(
+                    executor,
+                    reason=(
+                        "Anti-Nuke: Unauthorized role deletion | "
+                        f"Role: {deleted_role.name} "
+                        f"({deleted_role.id})"
+                    ),
+                    delete_message_seconds=0,
+                )
+
+                action_taken = "🔨 User banned"
+                action_success = True
+
+            except discord.Forbidden:
+                action_taken = (
+                    "❌ Ban failed — missing permission "
+                    "or bot role is too low"
+                )
+                action_success = False
+
+            except discord.HTTPException as error:
+                action_taken = f"❌ Ban failed — {error}"
+                action_success = False
+
+        log_channel_id = await get_log_channel(guild.id)
+
+        if log_channel_id is None:
+            return
+
+        log_channel = guild.get_channel(log_channel_id)
+
+        if not isinstance(log_channel, discord.TextChannel):
+            return
+
+        if whitelisted:
+            color = discord.Color.green()
+        elif action_success:
+            color = discord.Color.red()
+        else:
+            color = discord.Color.orange()
+
+        embed = discord.Embed(
+            title="🚨 Role Deleted",
+            color=color,
+            timestamp=discord.utils.utcnow(),
+        )
+
+        embed.add_field(
+            name="Role",
+            value=(
+                f"Name: `{deleted_role.name}`\n"
+                f"ID: `{deleted_role.id}`"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Executor",
+            value=(
+                f"{executor.mention}\n"
+                f"`{executor.id}`"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Whitelisted",
+            value="✅ Yes" if whitelisted else "❌ No",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Action Taken",
+            value=action_taken,
+            inline=False,
+        )
+
+        embed.set_footer(text=f"Server: {guild.name}")
+
+        try:
+            await log_channel.send(embed=embed)
+
+        except discord.Forbidden:
+            print(
+                f"[SECURITY] Cannot send messages "
+                f"in log channel {log_channel.id}"
+            )
+
+        except discord.HTTPException as error:
+            print(f"[SECURITY] Failed to send role-delete log: {error}")
 async def setup(bot: commands.Bot):
     await bot.add_cog(Events(bot))
