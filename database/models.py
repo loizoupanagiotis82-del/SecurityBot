@@ -21,3 +21,4 @@ class Warning(Base):
 
     reason: Mapped[str] = mapped_column(String(500))
 from database.guild_settings import GuildSettings
+from database.whitelist import Whitelist
