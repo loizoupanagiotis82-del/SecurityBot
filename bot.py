@@ -3,6 +3,9 @@ import os
 import discord
 from discord.ext import commands
 
+from database.database import engine
+from database.models import Base
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
 
@@ -23,31 +26,45 @@ class SecurityBot(commands.Bot):
         )
 
     async def setup_hook(self):
+        print("Connecting to PostgreSQL...")
+
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+        print("Database connected.")
+
         print("Loading cogs...")
 
         for filename in os.listdir("./cogs"):
             if not filename.endswith(".py"):
                 continue
 
-            # Δεν φορτώνουμε αρχεία όπως __init__.py
             if filename.startswith("_"):
                 continue
 
             extension = f"cogs.{filename[:-3]}"
-            await self.load_extension(extension)
-            print(f"Loaded {extension}")
+
+            try:
+                await self.load_extension(extension)
+                print(f"Loaded {extension}")
+            except Exception as error:
+                print(f"Failed to load {extension}: {error}")
+                raise
 
         if DEV_GUILD_ID:
             guild = discord.Object(id=int(DEV_GUILD_ID))
 
-            # Αντιγράφει τα global commands στον test server.
             self.tree.copy_global_to(guild=guild)
-
             synced = await self.tree.sync(guild=guild)
+
             print(f"Synced {len(synced)} commands to test server.")
         else:
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} global commands.")
+
+    async def close(self):
+        await engine.dispose()
+        await super().close()
 
 
 bot = SecurityBot()
