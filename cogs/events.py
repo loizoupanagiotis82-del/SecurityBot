@@ -18,7 +18,7 @@ class Events(commands.Cog):
     ):
         guild = deleted_channel.guild
 
-        # Δίνουμε λίγο χρόνο στο Discord να ενημερώσει τα Audit Logs.
+        # Περιμένουμε λίγο ώστε να ενημερωθούν τα Audit Logs.
         await asyncio.sleep(1)
 
         executor = None
@@ -28,8 +28,6 @@ class Events(commands.Cog):
                 limit=5,
                 action=discord.AuditLogAction.channel_delete,
             ):
-                # Επιβεβαιώνουμε ότι το audit entry αφορά το κανάλι
-                # που μόλις διαγράφηκε.
                 if entry.target and entry.target.id == deleted_channel.id:
                     executor = entry.user
                     break
@@ -52,10 +50,43 @@ class Events(commands.Cog):
             )
             return
 
+        # Δεν τιμωρούμε το ίδιο το bot.
+        if self.bot.user and executor.id == self.bot.user.id:
+            return
+
         whitelisted = await is_whitelisted(
             guild_id=guild.id,
             user_id=executor.id,
         )
+
+        action_taken = "None — user is whitelisted"
+        action_success = True
+
+        if not whitelisted:
+            try:
+                await guild.ban(
+                    executor,
+                    reason=(
+                        "Anti-Nuke: Unauthorized channel deletion | "
+                        f"Channel: {deleted_channel.name} "
+                        f"({deleted_channel.id})"
+                    ),
+                    delete_message_seconds=0,
+                )
+
+                action_taken = "🔨 User banned"
+                action_success = True
+
+            except discord.Forbidden:
+                action_taken = (
+                    "❌ Ban failed — bot role is too low "
+                    "or Ban Members permission is missing"
+                )
+                action_success = False
+
+            except discord.HTTPException as error:
+                action_taken = f"❌ Ban failed — Discord error: {error}"
+                action_success = False
 
         log_channel_id = await get_log_channel(guild.id)
 
@@ -75,13 +106,16 @@ class Events(commands.Cog):
             )
             return
 
+        if whitelisted:
+            color = discord.Color.green()
+        elif action_success:
+            color = discord.Color.red()
+        else:
+            color = discord.Color.orange()
+
         embed = discord.Embed(
             title="🚨 Channel Deleted",
-            color=(
-                discord.Color.green()
-                if whitelisted
-                else discord.Color.red()
-            ),
+            color=color,
             timestamp=discord.utils.utcnow(),
         )
 
@@ -111,13 +145,11 @@ class Events(commands.Cog):
 
         embed.add_field(
             name="Action Taken",
-            value="None — detection mode",
+            value=action_taken,
             inline=False,
         )
 
-        embed.set_footer(
-            text=f"Server: {guild.name}"
-        )
+        embed.set_footer(text=f"Server: {guild.name}")
 
         try:
             await log_channel.send(embed=embed)
