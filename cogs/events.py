@@ -11,83 +11,44 @@ class Events(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.Cog.listener()
-    async def on_guild_channel_delete(
+    async def get_executor(
         self,
-        deleted_channel: discord.abc.GuildChannel,
+        guild: discord.Guild,
+        action: discord.AuditLogAction,
+        target_id: int,
     ):
-        guild = deleted_channel.guild
-
-        # Περιμένουμε λίγο ώστε να ενημερωθούν τα Audit Logs.
         await asyncio.sleep(1)
-
-        executor = None
 
         try:
             async for entry in guild.audit_logs(
                 limit=5,
-                action=discord.AuditLogAction.channel_delete,
+                action=action,
             ):
-                if entry.target and entry.target.id == deleted_channel.id:
-                    executor = entry.user
-                    break
+                if entry.target and entry.target.id == target_id:
+                    return entry.user
 
         except discord.Forbidden:
             print(
                 f"[SECURITY] Missing View Audit Log permission "
                 f"in guild {guild.id}"
             )
-            return
 
         except discord.HTTPException as error:
             print(f"[SECURITY] Audit log error: {error}")
-            return
 
-        if executor is None:
-            print(
-                f"[SECURITY] Could not identify who deleted "
-                f"channel {deleted_channel.name}"
-            )
-            return
+        return None
 
-        # Δεν τιμωρούμε το ίδιο το bot.
-        if self.bot.user and executor.id == self.bot.user.id:
-            return
-
-        whitelisted = await is_whitelisted(
-            guild_id=guild.id,
-            user_id=executor.id,
-        )
-
-        action_taken = "None — user is whitelisted"
-        action_success = True
-
-        if not whitelisted:
-            try:
-                await guild.ban(
-                    executor,
-                    reason=(
-                        "Anti-Nuke: Unauthorized channel deletion | "
-                        f"Channel: {deleted_channel.name} "
-                        f"({deleted_channel.id})"
-                    ),
-                    delete_message_seconds=0,
-                )
-
-                action_taken = "🔨 User banned"
-                action_success = True
-
-            except discord.Forbidden:
-                action_taken = (
-                    "❌ Ban failed — bot role is too low "
-                    "or Ban Members permission is missing"
-                )
-                action_success = False
-
-            except discord.HTTPException as error:
-                action_taken = f"❌ Ban failed — Discord error: {error}"
-                action_success = False
-
+    async def send_security_log(
+        self,
+        guild: discord.Guild,
+        title: str,
+        target_name: str,
+        target_id: int,
+        executor,
+        whitelisted: bool,
+        action_taken: str,
+        action_success: bool,
+    ):
         log_channel_id = await get_log_channel(guild.id)
 
         if log_channel_id is None:
@@ -114,7 +75,7 @@ class Events(commands.Cog):
             color = discord.Color.orange()
 
         embed = discord.Embed(
-            title="🚨 Channel Deleted",
+            title=title,
             color=color,
             timestamp=discord.utils.utcnow(),
         )
@@ -122,8 +83,8 @@ class Events(commands.Cog):
         embed.add_field(
             name="Channel",
             value=(
-                f"Name: `{deleted_channel.name}`\n"
-                f"ID: `{deleted_channel.id}`"
+                f"Name: `{target_name}`\n"
+                f"ID: `{target_id}`"
             ),
             inline=False,
         )
@@ -156,12 +117,169 @@ class Events(commands.Cog):
 
         except discord.Forbidden:
             print(
-                f"[SECURITY] Missing permission to send messages "
+                f"[SECURITY] Cannot send messages "
                 f"in log channel {log_channel.id}"
             )
 
         except discord.HTTPException as error:
-            print(f"[SECURITY] Failed to send log embed: {error}")
+            print(f"[SECURITY] Failed to send log: {error}")
+
+    # ===========================
+    # ANTI CHANNEL DELETE
+    # ===========================
+
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(
+        self,
+        deleted_channel: discord.abc.GuildChannel,
+    ):
+        guild = deleted_channel.guild
+
+        executor = await self.get_executor(
+            guild=guild,
+            action=discord.AuditLogAction.channel_delete,
+            target_id=deleted_channel.id,
+        )
+
+        if executor is None:
+            return
+
+        if self.bot.user and executor.id == self.bot.user.id:
+            return
+
+        whitelisted = await is_whitelisted(
+            guild_id=guild.id,
+            user_id=executor.id,
+        )
+
+        action_taken = "None — user is whitelisted"
+        action_success = True
+
+        if not whitelisted:
+            try:
+                await guild.ban(
+                    executor,
+                    reason=(
+                        "Anti-Nuke: Unauthorized channel deletion | "
+                        f"Channel: {deleted_channel.name} "
+                        f"({deleted_channel.id})"
+                    ),
+                    delete_message_seconds=0,
+                )
+
+                action_taken = "🔨 User banned"
+                action_success = True
+
+            except discord.Forbidden:
+                action_taken = (
+                    "❌ Ban failed — missing permission "
+                    "or bot role is too low"
+                )
+                action_success = False
+
+            except discord.HTTPException as error:
+                action_taken = f"❌ Ban failed — {error}"
+                action_success = False
+
+        await self.send_security_log(
+            guild=guild,
+            title="🚨 Channel Deleted",
+            target_name=deleted_channel.name,
+            target_id=deleted_channel.id,
+            executor=executor,
+            whitelisted=whitelisted,
+            action_taken=action_taken,
+            action_success=action_success,
+        )
+
+    # ===========================
+    # ANTI CHANNEL CREATE
+    # ===========================
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(
+        self,
+        created_channel: discord.abc.GuildChannel,
+    ):
+        guild = created_channel.guild
+
+        executor = await self.get_executor(
+            guild=guild,
+            action=discord.AuditLogAction.channel_create,
+            target_id=created_channel.id,
+        )
+
+        if executor is None:
+            return
+
+        if self.bot.user and executor.id == self.bot.user.id:
+            return
+
+        whitelisted = await is_whitelisted(
+            guild_id=guild.id,
+            user_id=executor.id,
+        )
+
+        action_taken = "None — user is whitelisted"
+        action_success = True
+
+        if not whitelisted:
+            deletion_result = "Created channel deleted"
+
+            try:
+                await created_channel.delete(
+                    reason="Anti-Nuke: Unauthorized channel creation"
+                )
+
+            except discord.Forbidden:
+                deletion_result = "Could not delete created channel"
+                action_success = False
+
+            except discord.HTTPException:
+                deletion_result = "Discord error while deleting channel"
+                action_success = False
+
+            try:
+                await guild.ban(
+                    executor,
+                    reason=(
+                        "Anti-Nuke: Unauthorized channel creation | "
+                        f"Channel: {created_channel.name} "
+                        f"({created_channel.id})"
+                    ),
+                    delete_message_seconds=0,
+                )
+
+                action_taken = (
+                    f"🔨 User banned\n"
+                    f"🗑️ {deletion_result}"
+                )
+
+            except discord.Forbidden:
+                action_taken = (
+                    "❌ Ban failed — missing permission "
+                    "or bot role is too low\n"
+                    f"🗑️ {deletion_result}"
+                )
+                action_success = False
+
+            except discord.HTTPException as error:
+                action_taken = (
+                    f"❌ Ban failed — {error}\n"
+                    f"🗑️ {deletion_result}"
+                )
+                action_success = False
+
+        await self.send_security_log(
+            guild=guild,
+            title="🚨 Channel Created",
+            target_name=created_channel.name,
+            target_id=created_channel.id,
+            executor=executor,
+            whitelisted=whitelisted,
+            action_taken=action_taken,
+            action_success=action_success,
+        )
 
 
 async def setup(bot: commands.Bot):
